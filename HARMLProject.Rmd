@@ -1,0 +1,228 @@
+---
+title: "HAR Machine Learning Project"
+author: "Ojustwin Naik"
+date: "August 21, 2015"
+output: html_document
+---
+
+#Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In a project led by Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants was collected to investigate "how (well)" an activity was performed by the wearer. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+#Objective
+The objective of this report is to use the data from the study by Velloso et al. and train a machine learning algorithm that can predict 20 different test cases by classifying each into the following classes: exercise performed exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips.
+
+#Summary
+
+Given the limitations, the best predictive model for classifying the quality of the exercise using the HAR data was built using the Random Forest algorithm.  There were significant limitations that influenced the study. The biggest being that the missing summary stats data could not be used as part of the model training. In the original study the summary stats played a big role in the classification algorithm.  Furthermore, there were a limited number of algorithms tested in this study. There were some other algorithms such as Bagged CART that were also promising but were not as fast or accurate as the Random Forest.
+
+The Random Forest model developed here has an out of sample accuracy of 0.993 within a 95% CI : (0.9909, 0.9947). The expected out of sample error is estimated at 0.007 or 0.7%.
+
+#Data
+
+The training data for this project are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. I
+
+```{r, echo=FALSE, message=FALSE}
+library(dplyr)
+library(caret)
+library(AppliedPredictiveModeling)
+library(kernlab)
+library(FSelector)
+library(mlbench)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(doMC)
+registerDoMC(cores = 1)
+```
+
+##Read in files
+Set working directory with CSV files.
+
+```{r}
+training <- read.csv("pml-training.csv", na.strings=c("NA","DIV/0",""))
+testing <- read.csv("pml-testing.csv", na.strings=c("NA","DIV/0",""))
+```
+
+#Preprocessing
+
+After studying the data, any variables that were mostly NA, Div0 or nulls were selected for removal. Most of these NA variables were summary stats which will are not expected to be available in the test data. Furthermore, date/time, subject, new_window, and num_window variables were also selected for removal as they will have no meaningful relationship to the prediction of the outcome variable.
+
+```{r}
+training <- training[, colSums(is.na(training))==0]
+testing <- testing[, colSums(is.na(testing))==0]
+
+training <- training[, -which(names(training) %in% c("user_name","raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window","num_window"))]
+testing <- testing[, -which(names(testing) %in% c("user_name","raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window","num_window"))]
+
+training <- training[,-c(1)]
+testing <- testing[,-c(1)]
+```
+
+After cleaning the resulting dataset does not have any predictors of Factor type that need to be converted. Also no near zero variance variables or highly correlated variables were found in the cleaned data set.
+
+The cleaned training set contains of 19622 obs. of  53 variables.
+
+#Data Splitting
+The training data set was partitioned into two sub data sets, 60% for training and 40% for testing.
+
+```{r}
+inTraining <- createDataPartition(training$classe, p = .60, list = FALSE)
+mTrain <- training[ inTraining,]
+mTest  <- training[-inTraining,]
+```
+
+The partitioned training set contains of 11776 obs. of  53 variables.
+
+#Model Training and Tuning
+
+##Quick and dirty model comparision
+The following machine learning algorithms were tested against a small sample of the data (1000 observations), out of which only 3 (BCART, GBM, RF) showed accuracy over 80%.
+
+```{r, eval=FALSE}
+#Use a small sample data set for quick train
+mTrain.smp <- sample_n(mTrain, 1000)
+set.seed(777)
+#Bagged CART
+modFit.BCART <- train(classe~.,data=mTrain.smp, method="treebag")
+set.seed(777) 
+#Stochastic Gradient Boosting
+modFit.GBM <- train(classe~.,data=mTrain.smp, method="gbm")
+set.seed(777)
+#Gaussian Process with Radial Basis Function Kernel
+modFit.GPR <- train(classe~.,data=mTrain.smp, method="gaussprRadial")
+set.seed(777) 
+#K-Nearest Neighbors
+modFit.KNN <- train(classe~.,data=mTrain.smp, method="knn")  
+set.seed(777) 
+#Naive Bayes
+modFit.NB <- train(classe~.,data=mTrain.smp, method="nb")  
+set.seed(777) 
+#Neural Networks
+modFit.NN <- train(classe~.,data=mTrain.smp, method="nnet")  
+set.seed(777) 
+#Random Forest
+modFit.RF <- train(classe~.,data=mTrain.smp, method="rf")
+set.seed(777) 
+#Support Vector Machines with Polynomial Kernel
+modFit.SVMP <- train(classe~.,data=mTrain.smp, method="svmPoly")  
+
+```
+
+```{r, echo=FALSE}
+#Load precalculated saved models instead of running them
+modFit.BCART = readRDS("modFitBCART.rds")
+modFit.GBM = readRDS("modFitGBM.rds")
+modFit.GPR = readRDS("modFitGPR.rds")
+modFit.KNN = readRDS("modFitKNN.rds")
+modFit.NB = readRDS("modFitNB.rds")
+modFit.NN = readRDS("modFitNN.rds")
+modFit.RF = readRDS("modFitRF.rds")
+modFit.SVMP = readRDS("modFitSVMP.rds")
+```
+
+```{r}
+# collect resamples
+results <- resamples(list(GPR=modFit.GPR, KNN=modFit.KNN, SVMP=modFit.SVMP, GBM=modFit.GBM, BCART=modFit.BCART, NB=modFit.NB, NN=modFit.NN, RF=modFit.RF))
+#summary(results)
+bwplot(results)
+```
+
+##Detailed Model Comparison
+
+Each of the 3 highest performing models from the quick comparison were then trained against the partitioned training *sub data set* while using K-Folds cross validation for tuning.
+
+```{r, eval=FALSE}
+#K-fold subsampling was used for cross validation with K=10
+fitControl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+#Random Forest
+set.seed(777)
+fit.RF <- train(classe~.,data=mTrain, trControl = fitControl, method="rf")  
+saveRDS(fit.RF, file="fitRF.rds")
+
+#Stochastic Gradient Boosting
+set.seed(777)    
+fit.GBM <- train(classe~.,data=mTrain, trControl = fitControl, method="gbm")  
+saveRDS(fit.GBM, file="fitGBM.rds")
+
+#Bagged CART
+set.seed(777)  
+fit.BCART <- train(classe~.,data=mTrain, trControl = fitControl, method="treebag")  
+saveRDS(fit.BCART, file="fitBCART.rds")
+
+```
+
+```{r, echo=FALSE}
+#Load precalculated saved models instead of running them
+fit.RF = readRDS("fitRF.rds")
+fit.GBM = readRDS("fitGBM.rds")
+fit.BCART = readRDS("fitBCART.rds")
+```
+
+
+```{r}
+# collect resamples
+fitResults <- resamples(list(RF=fit.RF, GBM=fit.GBM, BCART=fit.BCART))
+# summarize the distributions
+summary(fitResults)
+```
+
+Again based on Accuracy and Kappa the Random Forest model is most promising.
+
+##Test Model Predictions with hold out test data set for validation
+
+```{r, message=FALSE}
+predictRF <- predict(fit.RF, newdata = mTest)
+confusionMatrix(predictRF, mTest$classe)
+
+predictGBM <- predict(fit.GBM, newdata = mTest)
+#confusionMatrix(predictGBM, mTest$classe)
+
+predictBCART <- predict(fit.BCART, newdata = mTest)
+#confusionMatrix(predictBCART, mTest$classe)
+```
+
+Random Forest model performs the best on out of sample accuracy and kappa. But Bagged CART model is a close second. The confusion matrix after running the three models against the hold out test data shows that the models have the following accuracy: RF (0.993), BCART(0.981), GBM(0.9597).
+
+The RF model has out of sample accuracy of 0.993 within a 95% CI : (0.9909, 0.9947). The expected out of sample error is estimated at 0.007 or 0.7%.
+
+Below are plots comparing the performance of the 3 models.
+
+```{r, echo=FALSE}
+resultsTable <- data.frame(pred = predictRF, obs = mTest$classe)
+plotRF <- ggplot(resultsTable, aes(x = pred, y = obs, color=obs)) + geom_jitter(position = position_jitter(width = 0.25, height = 0.25)) + ggtitle("Random Forest")
+
+resultsTable <- data.frame(pred = predictBCART, obs = mTest$classe)
+plotBCART <- ggplot(resultsTable, aes(x = pred, y = obs, color=obs)) + geom_jitter(position = position_jitter(width = 0.25, height = 0.25)) + ggtitle("Bagged CART")
+
+resultsTable <- data.frame(pred = predictGBM, obs = mTest$classe)
+plotGBM <- ggplot(resultsTable, aes(x = pred, y = obs, color=obs)) + geom_jitter(position = position_jitter(width = 0.25, height = 0.25)) + ggtitle("Stochastic Gradient Boosting")
+
+
+grid.arrange(plotRF, plotBCART, plotGBM, ncol = 2, main = "Model Performance Out of Sample Test Data")
+```
+
+#Model Test
+Run the model against the separate test data with 20 observations. 
+```{r}
+predictRF.test <- predict(fit.RF, newdata = testing)
+predictRF.test
+```
+
+```{r, echo=FALSE}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(predictRF.test)
+```
+
